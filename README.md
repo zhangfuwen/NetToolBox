@@ -36,3 +36,4 @@
 - ohos.permission.GET_WIFI_INFO - WiFi 信息
 - ohos.permission.LOCATION - 位置（WiFi 扫描需要）
 - ohos.permission.ACCESS_BLUETOOTH - 蓝牙
+# CI Test
