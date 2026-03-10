@@ -27,33 +27,84 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    # 尝试使用 harmonyos-deploy 自动安装 SDK
-    # 或者手动安装 hvigorw
-    - name: Setup HarmonyOS Build Tools
+    # 下载华为命令行工具 (command-line-tools)
+    - name: Download Huawei Command Line Tools
       run: |
-        # 创建项目级 hvigorw 脚本
+        mkdir -p $HOME/hos-tools
+        cd $HOME/hos-tools
+        
+        # 尝试多个下载源
+        TOOL_URLS=(
+          "https://repo.huaweicloud.com/harmonyos/command-line-tools/5.0.3.906/command-line-tools-linux-x64-5.0.3.906.zip"
+          "https://contentcenter-vali-drcn.dbankcdn.cn/pvt_2/DeveloperAlliance_package_901_9/b1/v3/8q0g0tqo/v2/command-line-tools-linux-x64-5.0.3.906.zip"
+        )
+        
+        DOWNLOADED=false
+        for URL in "${TOOL_URLS[@]}"; do
+          echo "Trying: $URL"
+          if wget -q --timeout=120 "$URL" -O command-line-tools.zip; then
+            echo "Downloaded successfully"
+            DOWNLOADED=true
+            break
+          else
+            echo "Failed, trying next..."
+          fi
+        done
+        
+        if [ "$DOWNLOADED" = true ]; then
+          echo "Extracting tools..."
+          unzip -q command-line-tools.zip
+          
+          # 找到 sdkmgr
+          find . -name "sdkmgr" -type f 2>/dev/null | head -1
+          
+          # 设置环境变量
+          echo "$HOME/hos-tools/command-line-tools/bin" >> $GITHUB_PATH
+          echo "HOS_CMD_TOOLS=$HOME/hos-tools/command-line-tools" >> $GITHUB_ENV
+          
+          echo "Command line tools installed"
+          ls -la
+        else
+          echo "Failed to download command line tools"
+          echo "Will try npm packages instead"
+        fi
+
+    # 使用 sdkmgr 下载 SDK
+    - name: Install SDK with sdkmgr
+      run: |
+        if command -v sdkmgr &> /dev/null; then
+          echo "=== Installing SDK with sdkmgr ==="
+          
+          # 列出可用的 SDK
+          sdkmgr list packages || echo "Failed to list packages"
+          
+          # 安装 API 9 SDK
+          sdkmgr install packages apiVersion=9 || echo "Failed to install SDK"
+          
+          # 设置 SDK 路径
+          echo "HOS_SDK=$HOME/hos-sdk" >> $GITHUB_ENV
+          echo "$HOME/hos-sdk/toolchains" >> $GITHUB_PATH
+        else
+          echo "sdkmgr not found, skipping SDK installation"
+        fi
+
+    # 备用：尝试 npm 安装 hvigor
+    - name: Setup npm-based build tools
+      run: |
+        # 安装 hvigor CLI
+        npm install -g @ohos/hvigor-cli || echo "Failed to install hvigor-cli"
+        
+        # 创建项目级 hvigorw
         cat > hvigorw << 'EOF'
         #!/bin/bash
-        # 项目级 hvigor wrapper
-        
-        # 尝试找到全局 hvigor
         if command -v hvigor &> /dev/null; then
           hvigor "$@"
         else
           echo "Error: hvigor not found"
-          echo "Please install: npm install -g @ohos/hvigor-cli"
           exit 1
         fi
         EOF
-        
         chmod +x hvigorw
-        
-        # 安装 hvigor CLI
-        npm install -g @ohos/hvigor-cli || echo "Failed to install hvigor-cli"
-        
-        # 检查
-        which hvigor || echo "hvigor not in PATH"
-        ls -la hvigorw
 
     # 安装 harmonyos-deploy
     - name: Install harmonyos-deploy
