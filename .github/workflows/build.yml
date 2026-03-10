@@ -10,10 +10,20 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 使用社区非官方镜像（注意：非华为官方）
+    # 尝试多个社区镜像（注意：非华为官方，可能不稳定）
+    strategy:
+      matrix:
+        image: 
+          - flyfish1001/harmonyos-deveco:latest
+          - harmonyos/deveco:latest  
+          - openharmony/sdk:latest
+          - ghcr.io/openharmony/docker:latest
     container: 
-      image: docker.io/flyfish1001/harmonyos-deveco:latest
+      image: docker.io/${{ matrix.image }}
       options: --user root
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     
     steps:
     - uses: actions/checkout@v4
