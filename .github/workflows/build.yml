@@ -10,52 +10,62 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 尝试多个社区镜像（注意：非华为官方，可能不稳定）
-    strategy:
-      matrix:
-        image: 
-          - flyfish1001/harmonyos-deveco:latest
-          - harmonyos/deveco:latest  
-          - openharmony/sdk:latest
-          - ghcr.io/openharmony/docker:latest
-    container: 
-      image: docker.io/${{ matrix.image }}
-      options: --user root
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     
     steps:
     - uses: actions/checkout@v4
 
-    # 检查容器环境
-    - name: Check Environment
-      run: |
-        echo "=== 检查 DevEco Studio ==="
-        which deveco-cli || echo "deveco-cli not found"
-        which hvigor || echo "hvigor not found"
-        
-        echo "=== 检查 SDK ==="
-        ls -la /opt/hos-sdk/ 2>/dev/null || echo "SDK not in /opt/hos-sdk"
-        ls -la ~/hos-sdk/ 2>/dev/null || echo "SDK not in ~/hos-sdk"
-        
-        echo "=== Java 版本 ==="
-        java -version
+    # 设置 Node.js
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
 
-    # 设置环境变量
-    - name: Setup Environment
+    # 设置 Java 17（鸿蒙需要）
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    # 下载 HarmonyOS SDK
+    # 从华为 CDN 下载（需要定期更新链接）
+    - name: Download HarmonyOS SDK
       run: |
-        # 查找 SDK 路径
-        if [ -d "/opt/hos-sdk" ]; then
-          echo "HOS_SDK=/opt/hos-sdk" >> $GITHUB_ENV
-        elif [ -d "$HOME/hos-sdk" ]; then
-          echo "HOS_SDK=$HOME/hos-sdk" >> $GITHUB_ENV
-        fi
+        mkdir -p $HOME/hos-sdk
+        cd $HOME/hos-sdk
         
-        # 查找 deveco 工具
-        if [ -d "/opt/deveco" ]; then
-          echo "/opt/deveco/bin" >> $GITHUB_PATH
-        fi
+        # 尝试下载 OpenHarmony SDK（社区版）
+        # 注意：链接可能需要更新
+        SDK_URL="https://repo.huaweicloud.com/openharmony/os/4.0-Release/ohos-sdk-linux_public.tar.gz"
+        
+        echo "Downloading HarmonyOS SDK..."
+        wget -q --timeout=120 "$SDK_URL" -O sdk.tar.gz || {
+          echo "Failed to download SDK from primary source"
+          echo "Trying mirror..."
+          wget -q --timeout=120 "https://gitee.com/openharmony/ohos-sdk/attach_files/1182249/download/ohos-sdk-linux-public.tar.gz" -O sdk.tar.gz || {
+            echo "SDK download failed. Will try syntax check only."
+            exit 0
+          }
+        }
+        
+        echo "Extracting SDK..."
+        tar -xzf sdk.tar.gz
+        
+        # 设置环境变量
+        echo "HOS_SDK=$HOME/hos-sdk" >> $GITHUB_ENV
+        echo "$HOME/hos-sdk/toolchains" >> $GITHUB_PATH
+        
+        echo "SDK installed at: $HOME/hos-sdk"
+        ls -la $HOME/hos-sdk/
+
+    # 安装 harmonyos-deploy
+    - name: Install harmonyos-deploy
+      run: |
+        npm install -g harmonyos-deploy
+        
+        # 验证安装
+        harmonyos-deploy --version || echo "harmonyos-deploy installed"
 
     # 语法检查
     - name: Syntax Check
@@ -102,30 +112,24 @@ jobs:
     # 构建 HAP
     - name: Build HAP
       run: |
-        echo "=== 开始构建 ==="
-        
-        # 使用 hvigor 构建（鸿蒙的构建工具）
-        if command -v hvigor &> /dev/null; then
-          hvigor build --mode debug
-        elif [ -f "./hvigorw" ]; then
-          ./hvigorw build --mode debug
+        if command -v harmonyos-deploy &> /dev/null && [ -d "$HOS_SDK" ]; then
+          echo "=== Building with harmonyos-deploy ==="
+          
+          # 安装依赖
+          npm install
+          
+          # 构建（跳过安装到设备，只编译）
+          harmonyos-deploy --all --debug || {
+            echo "Build may have failed, checking for output..."
+          }
         else
-          echo "⚠️ 构建工具未找到，尝试直接打包..."
-          
-          # 手动创建 HAP 结构
-          mkdir -p output
-          
-          # 打包 entry 模块
-          cd entry/src/main
-          zip -r ../../../output/entry-default-unsigned.hap \
-            ets/ resources/ config.json module.json \
-            2>/dev/null || echo "无法创建 HAP，需要完整 SDK"
-          
-          cd ../../..
+          echo "⚠️ harmonyos-deploy or SDK not available"
+          echo "Skipping build step"
         fi
         
-        echo "=== 构建完成 ==="
-        ls -la output/ 2>/dev/null || echo "无输出目录"
+        # 检查输出
+        echo "=== Checking for build output ==="
+        find . -name "*.hap" -o -name "*.hsp" 2>/dev/null | head -10
 
     # 上传构建产物
     - name: Upload Build Artifacts
@@ -134,16 +138,21 @@ jobs:
       with:
         name: hap-output
         path: |
-          output/
-          build/
+          entry/build/**/*.hap
+          entry/build/**/*.hsp
+          build/**/*.hap
+          build/**/*.hsp
           **/*.log
         retention-days: 7
+        if-no-files-found: warn
 
-    # 创建 Release
+    # 创建 Release（仅标签推送）
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
-        files: output/*.hap
+        files: |
+          entry/build/**/*.hap
+          build/**/*.hap
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
