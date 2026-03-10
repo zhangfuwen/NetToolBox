@@ -27,36 +27,33 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    # 下载 HarmonyOS SDK
-    # 从华为 CDN 下载（需要定期更新链接）
-    - name: Download HarmonyOS SDK
+    # 尝试使用 harmonyos-deploy 自动安装 SDK
+    # 或者手动安装 hvigorw
+    - name: Setup HarmonyOS Build Tools
       run: |
-        mkdir -p $HOME/hos-sdk
-        cd $HOME/hos-sdk
+        # 创建项目级 hvigorw 脚本
+        cat > hvigorw << 'EOF'
+        #!/bin/bash
+        # 项目级 hvigor wrapper
         
-        # 尝试下载 OpenHarmony SDK（社区版）
-        # 注意：链接可能需要更新
-        SDK_URL="https://repo.huaweicloud.com/openharmony/os/4.0-Release/ohos-sdk-linux_public.tar.gz"
+        # 尝试找到全局 hvigor
+        if command -v hvigor &> /dev/null; then
+          hvigor "$@"
+        else
+          echo "Error: hvigor not found"
+          echo "Please install: npm install -g @ohos/hvigor-cli"
+          exit 1
+        fi
+        EOF
         
-        echo "Downloading HarmonyOS SDK..."
-        wget -q --timeout=120 "$SDK_URL" -O sdk.tar.gz || {
-          echo "Failed to download SDK from primary source"
-          echo "Trying mirror..."
-          wget -q --timeout=120 "https://gitee.com/openharmony/ohos-sdk/attach_files/1182249/download/ohos-sdk-linux-public.tar.gz" -O sdk.tar.gz || {
-            echo "SDK download failed. Will try syntax check only."
-            exit 0
-          }
-        }
+        chmod +x hvigorw
         
-        echo "Extracting SDK..."
-        tar -xzf sdk.tar.gz
+        # 安装 hvigor CLI
+        npm install -g @ohos/hvigor-cli || echo "Failed to install hvigor-cli"
         
-        # 设置环境变量
-        echo "HOS_SDK=$HOME/hos-sdk" >> $GITHUB_ENV
-        echo "$HOME/hos-sdk/toolchains" >> $GITHUB_PATH
-        
-        echo "SDK installed at: $HOME/hos-sdk"
-        ls -la $HOME/hos-sdk/
+        # 检查
+        which hvigor || echo "hvigor not in PATH"
+        ls -la hvigorw
 
     # 安装 harmonyos-deploy
     - name: Install harmonyos-deploy
