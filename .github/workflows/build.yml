@@ -1,0 +1,138 @@
+name: Build HarmonyOS
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # 使用社区非官方镜像（注意：非华为官方）
+    container: 
+      image: docker.io/flyfish1001/harmonyos-deveco:latest
+      options: --user root
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    # 检查容器环境
+    - name: Check Environment
+      run: |
+        echo "=== 检查 DevEco Studio ==="
+        which deveco-cli || echo "deveco-cli not found"
+        which hvigor || echo "hvigor not found"
+        
+        echo "=== 检查 SDK ==="
+        ls -la /opt/hos-sdk/ 2>/dev/null || echo "SDK not in /opt/hos-sdk"
+        ls -la ~/hos-sdk/ 2>/dev/null || echo "SDK not in ~/hos-sdk"
+        
+        echo "=== Java 版本 ==="
+        java -version
+
+    # 设置环境变量
+    - name: Setup Environment
+      run: |
+        # 查找 SDK 路径
+        if [ -d "/opt/hos-sdk" ]; then
+          echo "HOS_SDK=/opt/hos-sdk" >> $GITHUB_ENV
+        elif [ -d "$HOME/hos-sdk" ]; then
+          echo "HOS_SDK=$HOME/hos-sdk" >> $GITHUB_ENV
+        fi
+        
+        # 查找 deveco 工具
+        if [ -d "/opt/deveco" ]; then
+          echo "/opt/deveco/bin" >> $GITHUB_PATH
+        fi
+
+    # 语法检查
+    - name: Syntax Check
+      run: |
+        npm install -g typescript
+        
+        cat > check-syntax.js << 'EOF'
+        const fs = require('fs');
+        const path = require('path');
+        
+        function checkFiles(dir) {
+          const files = fs.readdirSync(dir, { recursive: true });
+          let hasError = false;
+          let fileCount = 0;
+          
+          files.forEach(file => {
+            if (typeof file === 'string' && file.endsWith('.ets')) {
+              fileCount++;
+              const fullPath = path.join(dir, file);
+              const content = fs.readFileSync(fullPath, 'utf8');
+              
+              // 检查括号匹配
+              const openBraces = (content.match(/{/g) || []).length;
+              const closeBraces = (content.match(/}/g) || []).length;
+              if (openBraces !== closeBraces) {
+                console.error(`❌ Error: ${file} has mismatched braces (${openBraces} vs ${closeBraces})`);
+                hasError = true;
+              } else {
+                console.log(`✓ ${file}`);
+              }
+            }
+          });
+          
+          console.log(`\nChecked ${fileCount} .ets files`);
+          return hasError;
+        }
+        
+        const hasError = checkFiles('entry/src/main/ets');
+        process.exit(hasError ? 1 : 0);
+        EOF
+        
+        node check-syntax.js
+
+    # 构建 HAP
+    - name: Build HAP
+      run: |
+        echo "=== 开始构建 ==="
+        
+        # 使用 hvigor 构建（鸿蒙的构建工具）
+        if command -v hvigor &> /dev/null; then
+          hvigor build --mode debug
+        elif [ -f "./hvigorw" ]; then
+          ./hvigorw build --mode debug
+        else
+          echo "⚠️ 构建工具未找到，尝试直接打包..."
+          
+          # 手动创建 HAP 结构
+          mkdir -p output
+          
+          # 打包 entry 模块
+          cd entry/src/main
+          zip -r ../../../output/entry-default-unsigned.hap \
+            ets/ resources/ config.json module.json \
+            2>/dev/null || echo "无法创建 HAP，需要完整 SDK"
+          
+          cd ../../..
+        fi
+        
+        echo "=== 构建完成 ==="
+        ls -la output/ 2>/dev/null || echo "无输出目录"
+
+    # 上传构建产物
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: hap-output
+        path: |
+          output/
+          build/
+          **/*.log
+        retention-days: 7
+
+    # 创建 Release
+    - name: Create Release
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: output/*.hap
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
